@@ -19,6 +19,7 @@ import (
 	"io"
     "bytes"
 	"strings"
+	"math"
 	
 
 
@@ -37,7 +38,7 @@ type User struct {
 type Challenge struct {
     gorm.Model
     EthereumAddress string `json:"ethereum_address"`
-    Nonce           int    `json:"nonce"`
+    Nonce          int64 `json:"nonce"`
 }
 
 
@@ -175,7 +176,8 @@ func CreateChallenge(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("Decoded Ethereum address: %s\n", challenge.EthereumAddress) // log the decoded Ethereum address
 
 
-    challenge.Nonce = rand.Int() // Generate a random nonce
+    challenge.Nonce = rand.Int63n(int64(math.Pow(2, 53) - 1)) // Generate a random nonce within JavaScript's safe integer range
+
 	fmt.Printf("Generated nonce: %d\n", challenge.Nonce)  // Add this log statement here
 
 
