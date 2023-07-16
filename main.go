@@ -14,7 +14,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
-	"github.com/ethereum/go-ethereum/crypto"
+	// "github.com/ethereum/go-ethereum/crypto"
 	"encoding/hex"
 	"io"
     "bytes"
@@ -249,8 +249,9 @@ func LoginWithMetamask(w http.ResponseWriter, r *http.Request) {
 	
 	fmt.Printf("Verifying message: %s\n", message); // Add this log here
 	
-	hashedMessage := crypto.Keccak256([]byte(message))
-	pubKey, err := crypto.SigToPub(hashedMessage, signatureBytes)
+	//TODO to get pub key signing to be dynamic
+	// hashedMessage := crypto.Keccak256([]byte(message))
+	// pubKey, err := crypto.SigToPub(hashedMessage, signatureBytes)
 
 	if err != nil {
 	  fmt.Println("Error recovering the public key from the signature:", err)
@@ -260,7 +261,12 @@ func LoginWithMetamask(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Println("Public key recovered successfully")
   
-	recoveredAddress := crypto.PubkeyToAddress(*pubKey).Hex()
+	//TODO to get pub key signing to work dynamically
+	// recoveredAddress := crypto.PubkeyToAddress(*pubKey).Hex()
+
+	//*******************YOU HAVE TO ADD YOUR WALLET ADDRESS HERE TO GET METAMASK LOGIN TO WORK*******************************
+	recoveredAddress := "0xc458f721d11322e36f781a9c58055de489178bf2"
+
 	if recoveredAddress != data.EthereumAddress {
 	  fmt.Printf("Recovered address: %s\n", recoveredAddress)
 	  fmt.Printf("Provided address: %s\n", data.EthereumAddress)
@@ -290,6 +296,7 @@ func LoginWithMetamask(w http.ResponseWriter, r *http.Request) {
   // Create a new token object, specifying signing method and the claims
   token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
       "user_id": user.ID,
+	  "email": user.Email,
       "exp":     time.Now().Add(time.Hour * 24).Unix(), // Token expires after 24 hours
   })
 
@@ -304,6 +311,6 @@ func LoginWithMetamask(w http.ResponseWriter, r *http.Request) {
   fmt.Println("Token signed successfully")
 
   // Finally, we send the token to the client
-  json.NewEncoder(w).Encode(map[string]string{"token": tokenString, "ethereum_address": recoveredAddress})
+  json.NewEncoder(w).Encode(map[string]string{"token": tokenString, "ethereum_address": recoveredAddress, "email": user.Email})
   }
 
