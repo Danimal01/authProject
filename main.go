@@ -11,15 +11,19 @@ import (
 	"github.com/dgrijalva/jwt-go"
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
-	"golang.org/x/crypto/bcrypt"
+	// "golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	// "github.com/ethereum/go-ethereum/crypto"
 	"encoding/hex"
 	"io"
+	"os"
     "bytes"
 	"strings"
 	"math"
+	// "github.com/mailjet/mailjet-apiv3-go"
+	// "github.com/mailjet/mailjet-apiv3-go/resources"
+	mailjet "github.com/mailjet/mailjet-apiv3-go"
 	
 
 
@@ -40,6 +44,14 @@ type Challenge struct {
     EthereumAddress string `json:"ethereum_address"`
     Nonce          int64 `json:"nonce"`
 }
+
+type Token struct {
+	gorm.Model
+	Email  string
+	Token  string
+	Expiry time.Time
+}
+
 
 
 // DB connection
@@ -63,7 +75,10 @@ func main() {
 
 	// User routes
 	r.HandleFunc("/api/register", RegisterUser).Methods("POST")
-	r.HandleFunc("/api/login", LoginUser).Methods("POST")
+	// r.HandleFunc("/api/login", LoginUser).Methods("POST")
+	r.HandleFunc("/api/login-request", LoginRequest).Methods("POST")
+	r.HandleFunc("/api/login/{token}", VerifyToken).Methods("GET")
+
 
 	//metamask routes
 	r.HandleFunc("/api/connect-metamask", ConnectMetaMask).Methods("POST")
@@ -83,6 +98,25 @@ func main() {
 	addr := ":8080"
 	fmt.Printf("Server listening on %s\n", addr)
 	log.Fatal(http.ListenAndServe(addr, handler))
+
+
+
+	mj := mailjet.NewMailjetClient(os.Getenv("3ed36443ad63889d1bbad4e2f148edb7"), os.Getenv("0316a13447cca60b9e6b5eb2059e7262"))
+
+    param := &mailjet.InfoSendMail{
+        FromEmail:       "decentraworld01@gmail.com",
+        FromName:        "Mailjet Pilot",
+        Subject:         "Your email flight plan!",
+        TextPart:        "Dear passenger, welcome to Mailjet! May the delivery force be with you!",
+        HTMLPart:        "<h3>Dear passenger, welcome to Mailjet!</h3><br />May the delivery force be with you!",
+		Recipients:      []mailjet.Recipient{{Email: "passenger@mailjet.com"}},
+    }
+
+    resp, err := mj.SendMail(param)
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Printf("Data: %+v\n", resp)
 }
 
 // RegisterUser creates a new user
@@ -94,50 +128,130 @@ func RegisterUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	user.Password = string(hash)
 	db.Create(&user)
 
 	json.NewEncoder(w).Encode(user)
 }
 
-// LoginUser logs in a user and returns a JWT
-func LoginUser(w http.ResponseWriter, r *http.Request) {
-	var user, userDB User
+func LoginRequest(w http.ResponseWriter, r *http.Request) {
+	var user User
 	err := json.NewDecoder(r.Body).Decode(&user)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	db.Where("email = ?", user.Email).First(&userDB)
+	// Generate a random token
+	token := strconv.Itoa(rand.Intn(1e9))
 
-	err = bcrypt.CompareHashAndPassword([]byte(userDB.Password), []byte(user.Password))
+	// Store the token in the database with an expiration date
+	db.Create(&Token{
+		Email: user.Email,
+		Token: token,
+		Expiry: time.Now().Add(15 * time.Minute),
+	})
+
+	// Send the magic link email
+	err = sendMagicLinkEmail(user.Email, token)
 	if err != nil {
-		http.Error(w, "Invalid credentials", http.StatusBadRequest)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	w.WriteHeader(http.StatusOK)
+}
+
+func sendMagicLinkEmail(email string, token string) error {
+    // Create a new Mailjet client
+    mj := mailjet.NewMailjetClient("3ed36443ad63889d1bbad4e2f148edb7", "0316a13447cca60b9e6b5eb2059e7262")
+
+	// Create the full magic link URL
+	link := "http://localhost:4200/login/" + token
+
+    // Create the email parameters
+    param := &mailjet.InfoSendMail{
+        FromEmail:       "decentraworld01@gmail.com",
+        FromName:        "Your Name",
+        Subject:         "Your Magic Link for Login!",
+        TextPart:        fmt.Sprintf("Click this link to log in: %s", link),
+        HTMLPart:        fmt.Sprintf("<p>Click this link to log in: <a href=\"%s\">%s</a></p>", link, link),
+		Recipients:      []mailjet.Recipient{{Email: email}},
+    }
+
+    // Send the email
+    _, err := mj.SendMail(param)
+    if err != nil {
+        return err
+    }
+
+    return nil
+}
+
+
+func VerifyToken(w http.ResponseWriter, r *http.Request) {
+	token := mux.Vars(r)["token"]
+
+	var tokenDB Token
+	db.Where("token = ? AND expiry > ?", token, time.Now()).First(&tokenDB)
+
+	if tokenDB.Token == "" {
+		http.Error(w, "Invalid or expired token", http.StatusBadRequest)
+		return
+	}
+
+	// Log the user in
 	expirationTime := time.Now().Add(5 * time.Minute)
 	claims := &jwt.StandardClaims{
-		Subject:   userDB.Email,
+		Subject:   tokenDB.Email,
 		ExpiresAt: expirationTime.Unix(),
 	}
 
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, err := token.SignedString([]byte(secretKey))
+	jwtToken := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := jwtToken.SignedString([]byte(secretKey))
 	if err != nil {
 		http.Error(w, "Failed to create a token", http.StatusInternalServerError)
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]string{"token": tokenString, "email": userDB.Email})
+	json.NewEncoder(w).Encode(map[string]string{"token": tokenString, "email": tokenDB.Email})
 }
+
+
+
+
+
+// // LoginUser logs in a user and returns a JWT
+// func LoginUser(w http.ResponseWriter, r *http.Request) {
+// 	var user, userDB User
+// 	err := json.NewDecoder(r.Body).Decode(&user)
+// 	if err != nil {
+// 		http.Error(w, err.Error(), http.StatusBadRequest)
+// 		return
+// 	}
+
+// 	db.Where("email = ?", user.Email).First(&userDB)
+
+// 	err = bcrypt.CompareHashAndPassword([]byte(userDB.Password), []byte(user.Password))
+// 	if err != nil {
+// 		http.Error(w, "Invalid credentials", http.StatusBadRequest)
+// 		return
+// 	}
+
+// 	expirationTime := time.Now().Add(5 * time.Minute)
+// 	claims := &jwt.StandardClaims{
+// 		Subject:   userDB.Email,
+// 		ExpiresAt: expirationTime.Unix(),
+// 	}
+
+// 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+// 	tokenString, err := token.SignedString([]byte(secretKey))
+// 	if err != nil {
+// 		http.Error(w, "Failed to create a token", http.StatusInternalServerError)
+// 		return
+// 	}
+
+// 	json.NewEncoder(w).Encode(map[string]string{"token": tokenString, "email": userDB.Email})
+// }
 
 
 // ConnectMetaMask connects a MetaMask account
